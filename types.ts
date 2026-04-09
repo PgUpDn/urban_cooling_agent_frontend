@@ -1,4 +1,4 @@
-export type ViewState = 'setup' | 'results' | 'comparison';
+export type ViewState = 'setup' | 'map' | 'results' | 'comparison';
 
 export interface Message {
   id: string;

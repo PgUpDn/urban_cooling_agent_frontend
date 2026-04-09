@@ -10,6 +10,7 @@ import { ChatInterface } from './components/ChatInterface';
 import { ParamSidebar } from './components/ParamSidebar';
 import { ResultsDashboard } from './components/ResultsDashboard';
 import { ComparisonView } from './components/ComparisonView';
+import { RegionSelect } from './components/RegionSelect';
 
 function ts() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
 let mc = 0;
@@ -22,6 +23,9 @@ const STORAGE_KEYS = {
   activeSessionId: 'urbanCooling:activeSessionId',
   completedSessionId: 'urbanCooling:lastCompletedSessionId',
   completedResults: 'urbanCooling:lastCompletedResults',
+  chatMessages: 'urbanCooling:chatMessages',
+  selectedStlDir: 'urbanCooling:selectedStlDir',
+  activeView: 'urbanCooling:activeView',
 } as const;
 
 function buildSteps(stage: string): WorkflowStep[] {
@@ -64,8 +68,17 @@ function persistCompletedResults(sessionId: string, results: SimulationResults) 
 }
 
 const App: React.FC = () => {
-  const [view, setView] = useState<ViewState>('setup');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [view, setViewRaw] = useState<ViewState>(() => {
+    const saved = readStorage(STORAGE_KEYS.activeView);
+    if (saved === 'setup' || saved === 'map' || saved === 'results' || saved === 'comparison') return saved;
+    return 'setup';
+  });
+  const setView = useCallback((v: ViewState) => { setViewRaw(v); writeStorage(STORAGE_KEYS.activeView, v); }, []);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const raw = readStorage(STORAGE_KEYS.chatMessages);
+    if (!raw) return [];
+    try { return JSON.parse(raw) as Message[]; } catch { return []; }
+  });
   const [backendReady, setBackendReady] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [simResults, setSimResults] = useState<SimulationResults | null>(null);
@@ -74,9 +87,21 @@ const App: React.FC = () => {
   const [liveParams, setLiveParams] = useState<LiveParams>({});
   const [chatLoading, setChatLoading] = useState(false);
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [selectedStlDir, setSelectedStlDir] = useState<string | null>(() => readStorage(STORAGE_KEYS.selectedStlDir));
+  const [regionBuildingCount, setRegionBuildingCount] = useState<number | null>(null);
+  const clarifyRef = useRef<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const miRef = useRef(0);
   const restoreAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    try { writeStorage(STORAGE_KEYS.chatMessages, JSON.stringify(messages.slice(-200))); } catch {}
+  }, [messages]);
+
+  useEffect(() => {
+    if (selectedStlDir) writeStorage(STORAGE_KEYS.selectedStlDir, selectedStlDir);
+    else removeStorage(STORAGE_KEYS.selectedStlDir);
+  }, [selectedStlDir]);
 
   useEffect(() => {
     let c = false;
@@ -84,12 +109,15 @@ const App: React.FC = () => {
       const ok = await checkBackendHealth();
       if (!c) {
         setBackendReady(ok);
-        setMessages([{
-          id: nid(), sender: 'agent', timestamp: ts(), type: 'text',
-          text: ok
-            ? 'Urban Cooling Agent ready. I can run CFD wind simulations, solar irradiance analysis, and thermal comfort (PET/MRT) assessments for urban districts.\n\nExample prompt:\n\u2022 "Run a fully coupled CFD + solar audit for the inter-monsoon period, emphasizing district comfort and energy demand"'
-            : 'Backend not reachable. Start the server with:\ncd /home/ubuntu/urban_agent && source .venv/bin/activate\nuvicorn api_server:app --host 0.0.0.0 --port 8000',
-        }]);
+        setMessages(prev => {
+          if (prev.length > 0) return prev;
+          return [{
+            id: nid(), sender: 'agent', timestamp: ts(), type: 'text',
+            text: ok
+              ? 'Urban Cooling Agent ready. I can run CFD wind simulations, solar irradiance analysis, and thermal comfort (PET/MRT) assessments for urban districts.\n\nExample prompt:\n\u2022 "Run a fully coupled CFD + solar audit for the inter-monsoon period, emphasizing district comfort and energy demand"'
+              : 'Backend not reachable. Start the server with:\ncd /home/ubuntu/urban_agent && source .venv/bin/activate\nuvicorn api_server:app --host 0.0.0.0 --port 8001',
+          }];
+        });
       }
     })();
     return () => { c = true; };
@@ -102,7 +130,6 @@ const App: React.FC = () => {
     if (storedResults) {
       setSimResults(storedResults);
       setSteps(buildSteps('complete'));
-      setView('results');
     }
   }, []);
 
@@ -170,7 +197,6 @@ const App: React.FC = () => {
             setSimResults(res.results);
             persistCompletedResults(activeSessionId, res.results);
             setSteps(buildSteps('complete'));
-            setView('results');
           }
           removeStorage(STORAGE_KEYS.activeSessionId);
           setSimRunning(false);
@@ -206,14 +232,16 @@ const App: React.FC = () => {
     setSimRunning(true); setSimResults(null); setLiveParams({}); setSteps(buildSteps('intent_analysis'));
     setMessages(p => [...p, { id: nid(), sender: 'agent', text: 'Starting analysis pipeline\u2026', timestamp: ts(), type: 'status' }]);
     try {
-      const { sessionId: sid } = await startSimulation({ query });
+      const params: { query: string; stl_directory?: string } = { query };
+      if (selectedStlDir) params.stl_directory = selectedStlDir;
+      const { sessionId: sid } = await startSimulation(params);
       writeStorage(STORAGE_KEYS.activeSessionId, sid);
       setSessionId(sid); startPoll(sid);
     } catch (e: any) {
       setSimRunning(false); setSteps(IDLE);
       setMessages(p => [...p, { id: nid(), sender: 'agent', text: `Failed: ${e?.message}`, timestamp: ts(), type: 'text' }]);
     }
-  }, [startPoll]);
+  }, [startPoll, selectedStlDir]);
 
   const handleConfirm = useCallback(() => {
     if (!pendingQuery) return;
@@ -230,6 +258,8 @@ const App: React.FC = () => {
 
   const handleSend = useCallback(async (text: string) => {
     if (chatLoading || simRunning) return;
+    const currentClarification = clarifyRef.current;
+    clarifyRef.current = null;
     if (pendingQuery) setPendingQuery(null);
     setMessages(p => [...p, { id: nid(), sender: 'user', text, timestamp: ts(), type: 'text' }]);
     if (!backendReady) { setMessages(p => [...p, { id: nid(), sender: 'agent', text: 'Backend not connected.', timestamp: ts(), type: 'text' }]); return; }
@@ -237,12 +267,16 @@ const App: React.FC = () => {
     try {
       const { sendChatMessage } = await import('./services/agentService');
       const hist = messages.filter(m => m.text && m.type === 'text').slice(-20).map(m => ({ role: m.sender === 'user' ? 'user' as const : 'agent' as const, content: m.text! }));
-      const result = await sendChatMessage(text, hist, sessionId);
+      const result = await sendChatMessage(text, hist, sessionId, currentClarification);
       if (result.action === 'confirm') {
         setChatLoading(false);
         const scenario = result.scenario || result.query || text;
         setPendingQuery(result.query || text);
         setMessages(p => [...p, { id: nid(), sender: 'agent', text: `**Proposed Scenario**\n\n${scenario}\n\nShall I proceed with this analysis?`, timestamp: ts(), type: 'confirm' }]);
+      } else if (result.action === 'clarify') {
+        setChatLoading(false);
+        clarifyRef.current = result.query || null;
+        setMessages(p => [...p, { id: nid(), sender: 'agent', text: result.response || '', timestamp: ts(), type: 'text' }]);
       } else if (result.action === 'analyze') {
         setChatLoading(false);
         launchSimulation(result.query || text);
@@ -262,6 +296,16 @@ const App: React.FC = () => {
     setMessages(p => [...p, { id: nid(), sender: 'agent', text: 'Ready for a new analysis.', timestamp: ts(), type: 'status' }]);
   }, []);
 
+  const handleRegionConfirmed = useCallback((stlDir: string, _bounds: any, count: number) => {
+    setSelectedStlDir(stlDir);
+    setRegionBuildingCount(count);
+    setView('setup');
+    setMessages(p => [...p, {
+      id: nid(), sender: 'agent', timestamp: ts(), type: 'status',
+      text: `Region selected — ${count} buildings ready. You can now describe your analysis and this region will be used automatically.`,
+    }]);
+  }, []);
+
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-white">
       <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-6 shadow-sm z-30 shrink-0">
@@ -269,10 +313,11 @@ const App: React.FC = () => {
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white shadow-lg shadow-primary/30">
             <span className="material-icons-outlined text-xl">architecture</span>
           </div>
-          <h1 className="font-semibold text-lg tracking-tight font-display">Urban Cooling Agent <span className="text-slate-400 font-normal">| {view === 'setup' ? 'Chat' : view === 'results' ? 'Dashboard' : 'Comparison'}</span></h1>
+          <h1 className="font-semibold text-lg tracking-tight font-display">Urban Cooling Agent <span className="text-slate-400 font-normal">| {view === 'setup' ? 'Chat' : view === 'map' ? 'Map' : view === 'results' ? 'Dashboard' : 'Comparison'}</span></h1>
         </div>
         <div className="hidden md:flex gap-8 text-sm font-medium text-slate-500">
           <button onClick={() => setView('setup')} className={`hover:text-primary transition-colors ${view === 'setup' ? 'text-primary' : ''}`}>Chat</button>
+          <button onClick={() => setView('map')} className={`hover:text-primary transition-colors ${view === 'map' ? 'text-primary' : ''}`}>Map{selectedStlDir ? ' ✓' : ''}</button>
           <button onClick={() => setView('results')} className={`hover:text-primary transition-colors ${view === 'results' ? 'text-primary' : ''}`} disabled={!simResults}>Dashboard</button>
           <button onClick={() => setView('comparison')} className={`hover:text-primary transition-colors ${view === 'comparison' ? 'text-primary' : ''}`}>Comparison</button>
         </div>
@@ -288,9 +333,10 @@ const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden relative">
         {view === 'setup' && (<>
           <WorkflowSidebar steps={steps} title="Execution Plan" />
-          <ChatInterface messages={messages} onSend={handleSend} simRunning={simRunning} chatLoading={chatLoading} simCompleted={!!simResults} backendReady={backendReady} onViewDashboard={() => setView('results')} onNewAnalysis={handleNew} pendingConfirm={!!pendingQuery} onConfirm={handleConfirm} onReject={handleReject} />
+          <ChatInterface messages={messages} onSend={handleSend} simRunning={simRunning} chatLoading={chatLoading} simCompleted={!!simResults} backendReady={backendReady} onViewDashboard={() => setView('results')} onNewAnalysis={handleNew} pendingConfirm={!!pendingQuery} onConfirm={handleConfirm} onReject={handleReject} selectedStlDir={selectedStlDir} onGoToMap={() => setView('map')} />
           <ParamSidebar simulationResults={simResults} liveParams={liveParams} simRunning={simRunning} />
         </>)}
+        {view === 'map' && <RegionSelect selectedStlDir={selectedStlDir} onRegionConfirmed={handleRegionConfirmed} />}
         {view === 'results' && <ResultsDashboard onCompare={() => setView('comparison')} simulationResults={simResults} />}
         {view === 'comparison' && <ComparisonView />}
       </main>

@@ -14,9 +14,11 @@ interface ChatInterfaceProps {
   pendingConfirm?: boolean;
   onConfirm?: () => void;
   onReject?: () => void;
+  selectedStlDir?: string | null;
+  onGoToMap?: () => void;
 }
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSend, simRunning, chatLoading, simCompleted, backendReady, onViewDashboard, onNewAnalysis, pendingConfirm, onConfirm, onReject }) => {
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSend, simRunning, chatLoading, simCompleted, backendReady, onViewDashboard, onNewAnalysis, pendingConfirm, onConfirm, onReject, selectedStlDir, onGoToMap }) => {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -49,9 +51,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSend, 
                 <div className="flex flex-col items-start max-w-[80%]">
                   <div className="p-4 rounded-2xl rounded-tl-sm shadow-sm border-2 border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-slate-200">{msg.text}</div>
                   {pendingConfirm && (
-                    <div className="flex gap-2 mt-2">
-                      <button onClick={onConfirm} className="px-4 py-1.5 text-xs font-bold text-white bg-primary rounded-lg hover:bg-primary-hover transition-colors shadow-sm flex items-center gap-1"><span className="material-icons-outlined text-sm">play_arrow</span>Confirm &amp; Run</button>
-                      <button onClick={onReject} className="px-4 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-1"><span className="material-icons-outlined text-sm">close</span>Cancel</button>
+                    <div className="mt-2 space-y-2">
+                      {!selectedStlDir && (
+                        <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg px-3 py-2">
+                          <span className="material-icons-outlined text-sm">info</span>
+                          <span>No custom region selected — default district will be used.</span>
+                          {onGoToMap && <button onClick={onGoToMap} className="underline font-semibold ml-1 hover:text-amber-800">Select on Map</button>}
+                        </div>
+                      )}
+                      {selectedStlDir && (
+                        <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-lg px-3 py-2">
+                          <span className="material-icons-outlined text-sm">check_circle</span>
+                          <span>Custom region selected — will use your map selection.</span>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <button onClick={onConfirm} className="px-4 py-1.5 text-xs font-bold text-white bg-primary rounded-lg hover:bg-primary-hover transition-colors shadow-sm flex items-center gap-1"><span className="material-icons-outlined text-sm">play_arrow</span>Confirm &amp; Run</button>
+                        <button onClick={onReject} className="px-4 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-1"><span className="material-icons-outlined text-sm">close</span>Cancel</button>
+                      </div>
                     </div>
                   )}
                   <span className="text-[10px] text-slate-400 mt-1 mx-1">{msg.timestamp}</span>

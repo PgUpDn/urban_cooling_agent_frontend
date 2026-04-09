@@ -43,7 +43,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BACKEND_API_URL: ${{ secrets.BACKEND_API_URL }}
-          VITE_BASE_PATH: /urban_cooling_agent_frontend/
+          VITE_BASE_PATH: /urban-cooling-agent/
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
